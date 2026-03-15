@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Center Workload Scheduling</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#F7F6F2;--surface:#FFFFFF;--surface2:#F0EEE8;--border:#E2DED5;--border2:#CCC8BE;--text:#1A1917;--text2:#6B6760;--text3:#9B9890;--r:3px}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);padding:32px}
+.page{max-width:1100px;margin:0 auto}
+header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px;padding-bottom:20px;border-bottom:1.5px solid var(--border2);flex-wrap:wrap;gap:16px}
+.title-block h1{font-size:22px;font-weight:600;letter-spacing:-0.3px;line-height:1.2}
+.title-block p{font-size:13px;color:var(--text2);margin-top:4px;font-weight:300}
+.mode-controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.label-mono{font-family:'DM Mono',monospace;font-size:10px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3)}
+.mode-btn{font-family:'DM Mono',monospace;font-size:11px;font-weight:500;letter-spacing:0.05em;padding:7px 14px;border:1.5px solid var(--border2);border-radius:2px;background:var(--surface);color:var(--text2);cursor:pointer;transition:all 0.15s;text-transform:uppercase}
+.mode-btn:hover{background:var(--surface2);color:var(--text)}
+.mode-btn.active-naive{background:var(--text);color:var(--bg);border-color:var(--text)}
+.mode-btn.active-cost{background:#FEF3F2;color:#C9472F;border-color:#C9472F}
+.mode-btn.active-carbon{background:#EFF6FF;color:#2563EB;border-color:#2563EB}
+.mode-btn.active-both{background:#F0FDF4;color:#2D6A4F;border-color:#2D6A4F}
+.stats-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:20px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px}
+.s-label{font-family:'DM Mono',monospace;font-size:10px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);margin-bottom:6px}
+.s-value{font-size:24px;font-weight:600;letter-spacing:-0.5px}
+.s-delta{font-size:12px;margin-top:2px;color:var(--text3)}
+.s-delta.good{color:#2D6A4F}
+.s-delta.bad{color:#C9472F}
+.chart-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:20px 24px 16px;margin-bottom:16px}
+.panel-label{font-family:'DM Mono',monospace;font-size:10px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);margin-bottom:14px}
+.chart-wrap{position:relative;width:100%;height:440px}
+.legend-grid{display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)}
+.legend-group{}
+.legend-group-label{font-family:'DM Mono',monospace;font-size:9px;font-weight:500;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);margin-bottom:6px}
+.legend-items{display:flex;flex-wrap:wrap;gap:6px 14px}
+.legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)}
+.legend-swatch{width:12px;height:12px;border-radius:2px;flex-shrink:0}
+.legend-line{width:22px;height:3px;border-radius:1px;flex-shrink:0}
+.footnote{font-size:11px;color:var(--text3);line-height:1.6;padding:10px 14px;background:var(--surface2);border-radius:var(--r);border-left:2px solid var(--border2)}
+.footnote strong{color:var(--text2);font-weight:500}
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="title-block">
+      <h1>Data Center Workload Scheduling</h1>
+      <p>CAISO grid &middot; Day-ahead optimization &middot; Stacked MW demand with price &amp; carbon signals</p>
+    </div>
+    <div class="mode-controls">
+      <span class="label-mono" style="margin-right:4px">Mode:</span>
+      <button class="mode-btn active-naive" id="btn-naive"  onclick="setMode('naive')">Unoptimized</button>
+      <button class="mode-btn"             id="btn-cost"   onclick="setMode('cost')">&darr; Cost</button>
+      <button class="mode-btn"             id="btn-carbon" onclick="setMode('carbon')">&darr; Carbon</button>
+      <button class="mode-btn"             id="btn-both"   onclick="setMode('both')">&darr; Cost + Carbon</button>
+    </div>
+  </header>
+
+  <div class="stats-row">
+    <div class="stat-card"><div class="s-label">Electricity cost</div><div class="s-value" id="sv-cost">-</div><div class="s-delta" id="sd-cost">&nbsp;</div></div>
+    <div class="stat-card"><div class="s-label">Carbon emissions</div><div class="s-value" id="sv-carbon">-</div><div class="s-delta" id="sd-carbon">&nbsp;</div></div>
+    <div class="stat-card"><div class="s-label">Peak demand</div><div class="s-value" id="sv-peak">-</div><div class="s-delta" id="sd-peak">&nbsp;</div></div>
+    <div class="stat-card"><div class="s-label">Flex load shifted</div><div class="s-value" id="sv-shifted">-</div><div class="s-delta" id="sd-shifted">&nbsp;</div></div>
+  </div>
+
+  <div class="chart-panel">
+    <div class="panel-label">Stacked MW demand by hour &nbsp;&bull;&nbsp; electricity price ($/MWh) &nbsp;&bull;&nbsp; carbon intensity (gCO&#8322;/MWh)</div>
+    <div class="chart-wrap"><canvas id="mainChart"></canvas></div>
+    <div class="legend-grid">
+      <div class="legend-group">
+        <div class="legend-group-label">Fixed load</div>
+        <div class="legend-items">
+          <div class="legend-item"><span class="legend-swatch" style="background:#4A4845"></span>Web serving</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#6B6760"></span>Real-time inference</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#8C8A85"></span>Database ops</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#ADABA6"></span>Network / monitoring</div>
+        </div>
+      </div>
+      <div class="legend-group">
+        <div class="legend-group-label">Flexible load</div>
+        <div class="legend-items">
+          <div class="legend-item"><span class="legend-swatch" style="background:#1B4332"></span>ML training</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#2D6A4F"></span>Batch analytics</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#40916C"></span>ETL pipeline</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#52B788"></span>DB backup</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#74C69D"></span>Video transcode</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#95D5B2"></span>Dev / test suite</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#B7E4C7"></span>Log archival</div>
+        </div>
+      </div>
+      <div class="legend-group">
+        <div class="legend-group-label">Grid signals</div>
+        <div class="legend-items">
+          <div class="legend-item"><span class="legend-line" style="background:#C9472F"></span>Price ($/MWh) &mdash; right axis</div>
+          <div class="legend-item"><span class="legend-line" style="background:#2563EB;border-top:2px dashed #2563EB;height:0"></span>Carbon (gCO&#8322;/MWh) &mdash; right axis</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote" id="mode-footnote">
+    <strong>Unoptimized baseline:</strong> Flexible jobs start immediately on arrival. Load peaks align with the most expensive, highest-carbon grid hours.
+  </div>
+</div>
+
+<script>
+const HOURS=24;
+const labels=['12a','1a','2a','3a','4a','5a','6a','7a','8a','9a','10a','11a','12p','1p','2p','3p','4p','5p','6p','7p','8p','9p','10p','11p'];
+const price=[32,29,27,26,25,28,38,55,68,62,52,45,40,38,36,42,58,82,90,85,72,60,48,38];
+const carbon=[310,300,290,285,280,295,330,370,390,350,300,260,240,230,225,260,330,400,430,410,375,345,320,305];
+
+const fixedJobs=[
+  {name:"Web serving",power:3.0,color:"#4A4845"},
+  {name:"Real-time inference",power:2.5,color:"#6B6760"},
+  {name:"Database ops",power:1.5,color:"#8C8A85"},
+  {name:"Network / monitoring",power:1.0,color:"#ADABA6"},
+];
+const flexJobs=[
+  {name:"ML training",    power:4.0,hours:5,arrival:0, deadline:22,color:"#1B4332"},
+  {name:"Batch analytics",power:3.0,hours:3,arrival:6, deadline:20,color:"#2D6A4F"},
+  {name:"ETL pipeline",   power:2.5,hours:3,arrival:8, deadline:22,color:"#40916C"},
+  {name:"DB backup",      power:2.0,hours:2,arrival:0, deadline:7, color:"#52B788"},
+  {name:"Video transcode",power:2.0,hours:2,arrival:6, deadline:18,color:"#74C69D"},
+  {name:"Dev / test suite",power:1.5,hours:2,arrival:8,deadline:22,color:"#95D5B2"},
+  {name:"Log archival",   power:1.0,hours:1,arrival:0, deadline:6, color:"#B7E4C7"},
+];
+
+function bestStart(job,signal){
+  let best=job.arrival,bestScore=Infinity;
+  const lim=Math.min(job.deadline-job.hours+1,HOURS-job.hours);
+  for(let t=job.arrival;t<=lim;t++){
+    let s=0;for(let h=0;h<job.hours;h++)s+=signal[t+h]||999;
+    if(s<bestScore){bestScore=s;best=t;}
+  }
+  return best;
+}
+
+function getStarts(mode){
+  if(mode==='naive') return flexJobs.map(j=>j.arrival);
+  if(mode==='cost')  return flexJobs.map(j=>bestStart(j,price));
+  if(mode==='carbon')return flexJobs.map(j=>bestStart(j,carbon));
+  const combo=price.map((p,i)=>p/90+carbon[i]/430);
+  return flexJobs.map(j=>bestStart(j,combo));
+}
+
+const naiveStarts=getStarts('naive');
+
+function hourlyMW(starts){
+  return flexJobs.map((j,i)=>{
+    const a=new Array(HOURS).fill(0);
+    for(let h=starts[i];h<starts[i]+j.hours&&h<HOURS;h++)a[h]=j.power;
+    return a;
+  });
+}
+
+function computeStats(mode){
+  const starts=getStarts(mode);
+  const flex=hourlyMW(starts);
+  let cost=0,carb=0,peak=0,shifted=0;
+  for(let t=0;t<HOURS;t++){
+    let tot=fixedJobs.reduce((s,j)=>s+j.power,0);
+    flex.forEach(row=>tot+=row[t]);
+    cost+=price[t]*tot/1000;carb+=carbon[t]*tot/1000;
+    if(tot>peak)peak=tot;
+  }
+  flexJobs.forEach((j,i)=>{if(starts[i]!==naiveStarts[i])shifted+=j.power*j.hours;});
+  return{cost,carb,peak,shifted};
+}
+
+const naiveStats=computeStats('naive');
+let chart=null,currentMode='naive';
+
+const footnotes={
+  naive:"<strong>Unoptimized baseline:</strong> Flexible jobs start immediately on arrival. The load peaks align with the most expensive, highest-carbon grid hours &mdash; the worst possible outcome for both objectives.",
+  cost:"<strong>Optimized for cost:</strong> Flexible workloads shift into the cheapest hours &mdash; overnight and the midday solar dip. The green layers migrate away from the expensive evening peak. Notice how the total load curve reshapes to follow the price troughs.",
+  carbon:"<strong>Optimized for carbon:</strong> Flexible workloads target the lowest marginal carbon intensity hours, dominated by the midday solar window (10a&ndash;3p). This differs subtly from cost optimization &mdash; cheap overnight gas power is not the cleanest. Compare the green layer positions between modes.",
+  both:"<strong>Optimized for cost + carbon jointly:</strong> A combined normalized signal guides scheduling. The midday solar window scores well on both dimensions, while the evening peak (expensive <em>and</em> carbon-intensive) is aggressively avoided. This mode captures most of the benefit of both individual objectives.",
+};
+
+function buildDatasets(mode){
+  const starts=getStarts(mode);
+  const flex=hourlyMW(starts);
+  const ds=[];
+
+  fixedJobs.forEach(j=>{
+    ds.push({type:'bar',label:j.name,data:new Array(HOURS).fill(j.power),
+      backgroundColor:j.color,stack:'load',yAxisID:'yMW',order:3,borderWidth:0,borderRadius:0,categoryPercentage:1.0,barPercentage:1.0});
+  });
+
+  flexJobs.forEach((j,i)=>{
+    ds.push({type:'bar',label:j.name,data:flex[i],
+      backgroundColor:j.color,stack:'load',yAxisID:'yMW',order:3,borderWidth:0,borderRadius:0,categoryPercentage:1.0,barPercentage:1.0});
+  });
+
+  ds.push({type:'line',label:'Price ($/MWh)',data:price,
+    borderColor:'#C9472F',backgroundColor:'transparent',borderWidth:2.5,
+    pointRadius:3,pointBackgroundColor:'#C9472F',pointBorderColor:'#fff',pointBorderWidth:1.5,
+    tension:0.4,yAxisID:'yRight',order:1});
+
+  ds.push({type:'line',label:'Carbon (gCO2/MWh)',data:carbon.map(c=>c/4),
+    borderColor:'#2563EB',backgroundColor:'transparent',borderWidth:2.5,
+    borderDash:[5,3],
+    pointRadius:3,pointBackgroundColor:'#2563EB',pointBorderColor:'#fff',pointBorderWidth:1.5,
+    tension:0.4,yAxisID:'yRight',order:2});
+
+  return ds;
+}
+
+function renderChart(mode){
+  const ctx=document.getElementById('mainChart').getContext('2d');
+  const datasets=buildDatasets(mode);
+  if(chart){chart.data.datasets=datasets;chart.update('active');return;}
+  chart=new Chart(ctx,{
+    data:{labels,datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      animation:{duration:700,easing:'easeInOutQuart'},
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          callbacks:{
+            label:ctx=>{
+              if(ctx.dataset.label==='Price ($/MWh)')return'Price: $'+ctx.raw+'/MWh';
+              if(ctx.dataset.label==='Carbon (gCO2/MWh)')return'Carbon: '+(ctx.raw*4).toFixed(0)+' gCO\u2082/MWh';
+              if(ctx.raw===0)return null;
+              return ctx.dataset.label+': '+ctx.raw.toFixed(1)+' MW';
+            },
+            afterBody:items=>{
+              const t=items[0]?.dataIndex;
+              if(t===undefined)return'';
+              let tot=fixedJobs.reduce((s,j)=>s+j.power,0);
+              const starts=getStarts(currentMode);
+              flexJobs.forEach((j,i)=>{if(t>=starts[i]&&t<starts[i]+j.hours)tot+=j.power;});
+              return['','Total load: '+tot.toFixed(1)+' MW'];
+            }
+          }
+        }
+      },
+      scales:{
+        x:{stacked:true,
+          ticks:{font:{size:10,family:'DM Mono'},color:'#9B9890',maxRotation:0},
+          grid:{color:'rgba(0,0,0,0.04)'}},
+        yMW:{type:'linear',position:'left',stacked:true,min:0,max:26,
+          ticks:{font:{size:10,family:'DM Mono'},color:'#6B6760',callback:v=>v+' MW'},
+          grid:{color:'rgba(0,0,0,0.06)'},
+          title:{display:true,text:'Demand (MW)',color:'#6B6760',font:{size:10,family:'DM Mono'}}},
+        yRight:{type:'linear',position:'right',min:0,max:120,
+          ticks:{font:{size:10,family:'DM Mono'},color:'#888',
+            callback:v=>'$'+v+' / '+(v*4)+'g'},
+          grid:{drawOnChartArea:false},
+          title:{display:true,text:'$/MWh  |  gCO\u2082/MWh \xf74',color:'#888',font:{size:10,family:'DM Mono'}}},
+      }
+    }
+  });
+}
+
+function renderStats(mode){
+  const s=computeStats(mode);const n=naiveStats;
+  document.getElementById('sv-cost').textContent='$'+s.cost.toFixed(0);
+  document.getElementById('sv-carbon').textContent=s.carb.toFixed(0)+' kg';
+  document.getElementById('sv-peak').textContent=s.peak.toFixed(1)+' MW';
+  document.getElementById('sv-shifted').textContent=s.shifted.toFixed(0)+' MWh';
+  function delta(id,val,ref,lower){
+    const el=document.getElementById(id);
+    if(mode==='naive'){el.innerHTML='&nbsp;';el.className='s-delta';return;}
+    const pct=(val-ref)/ref*100;
+    el.textContent=(pct>0?'+':'')+pct.toFixed(1)+'% vs baseline';
+    el.className='s-delta '+(lower?pct<0:'pct>0')?'good':'bad';
+    el.className='s-delta '+((lower&&pct<0)||(!lower&&pct>0)?'good':'bad');
+  }
+  delta('sd-cost',s.cost,n.cost,true);
+  delta('sd-carbon',s.carb,n.carb,true);
+  delta('sd-peak',s.peak,n.peak,true);
+  delta('sd-shifted',s.shifted,n.shifted,false);
+}
+
+window.setMode=function(mode){
+  currentMode=mode;
+  ['naive','cost','carbon','both'].forEach(m=>{
+    const classes={naive:'active-naive',cost:'active-cost',carbon:'active-carbon',both:'active-both'};
+    document.getElementById('btn-'+m).className='mode-btn'+(m===mode?' '+classes[m]:'');
+  });
+  renderChart(mode);renderStats(mode);
+  document.getElementById('mode-footnote').innerHTML=footnotes[mode];
+};
+
+renderChart('naive');renderStats('naive');
+</script>
+</body>
+</html>
